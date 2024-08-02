@@ -6,32 +6,27 @@ import * as macos from "./macos-install";
 import * as linux from "./linux-install";
 import * as windows from "./windows-install";
 import { getVersion } from "./get-version";
+import { System } from "./os";
+import { SnapshotPackageResolver } from "./snapshot-package";
 
 async function run() {
   try {
     const requestedVersion = core.getInput("swift-version", { required: true });
-
     let platform = await system.getSystem();
-    let version = versions.verify(requestedVersion, platform);
-
-    switch (platform.os) {
-      case system.OS.MacOS:
-        await macos.install(version, platform);
-        break;
-      case system.OS.Ubuntu:
-        await linux.install(version, platform);
-        break;
-      case system.OS.Windows:
-        await windows.install(version, platform);
-    }
-
-    const current = await getVersion();
-    if (current === version) {
-      core.setOutput("version", version);
-    } else {
-      core.error(
-        `Failed to setup requested swift version. requestd: ${version}, actual: ${current}`
+    try {
+      let version = versions.verify(requestedVersion, platform);
+      await install(version, platform, async () =>
+        versions.swiftPackage(version, platform)
       );
+    } catch {
+      const resolver = new SnapshotPackageResolver(null);
+      const pkg = await resolver.execute(requestedVersion, platform);
+      if (!pkg) {
+        throw new Error(
+          `Couldn't form a package for requested version ${requestedVersion} on ${platform}`
+        );
+      }
+      await install(pkg.version, platform, async () => pkg);
     }
   } catch (error) {
     let dump: String;
@@ -43,6 +38,31 @@ async function run() {
 
     core.setFailed(
       `Unexpected error, unable to continue. Please report at https://github.com/swift-actions/setup-swift/issues${EOL}${dump}`
+    );
+  }
+}
+
+async function install(
+  version: string,
+  platform: System,
+  getPackage: () => Promise<versions.Package>
+) {
+  switch (platform.os) {
+    case system.OS.MacOS:
+      await macos.install(version, getPackage);
+      break;
+    case system.OS.Ubuntu:
+      await linux.install(version, platform, getPackage);
+      break;
+    case system.OS.Windows:
+      await windows.install(version, platform);
+  }
+  const current = await getVersion();
+  if (current === version) {
+    core.setOutput("version", version);
+  } else {
+    core.error(
+      `Failed to setup requested swift version. requestd: ${version}, actual: ${current}`
     );
   }
 }

@@ -155,9 +155,9 @@ const os = __importStar(__nccwpck_require__(2037));
 const path = __importStar(__nccwpck_require__(1017));
 const core = __importStar(__nccwpck_require__(2186));
 const toolCache = __importStar(__nccwpck_require__(7784));
-const swift_versions_1 = __nccwpck_require__(8263);
+const fs = __importStar(__nccwpck_require__(7147));
 const gpg_1 = __nccwpck_require__(9060);
-async function install(version, system) {
+async function install(version, system, getPackage) {
     if (os.platform() !== "linux") {
         core.error("Trying to run linux installer on non-linux os");
         return;
@@ -166,16 +166,17 @@ async function install(version, system) {
     if (swiftPath === null || swiftPath.trim().length == 0) {
         core.debug(`No matching installation found`);
         await (0, gpg_1.setupKeys)();
-        const swiftPkg = (0, swift_versions_1.swiftPackage)(version, system);
+        const swiftPkg = await getPackage();
         let { pkg, signature } = await download(swiftPkg);
         await (0, gpg_1.verify)(signature, pkg);
-        swiftPath = await unpack(pkg, swiftPkg.name, version, system);
+        swiftPath = await unpack(swiftPkg, pkg, version, system);
     }
     else {
         core.debug("Matching installation found");
     }
     core.debug("Adding swift to path");
     let binPath = path.join(swiftPath, "/usr/bin");
+    core.debug(`Swift binary path (exists=${fs.existsSync(binPath)}: ${binPath}`);
     core.addPath(binPath);
     core.debug("Swift installed");
 }
@@ -189,11 +190,16 @@ async function download({ url, name }) {
     core.debug("Swift download complete");
     return { pkg, signature, name };
 }
-async function unpack(packagePath, packageName, version, system) {
-    core.debug("Extracting package");
+async function unpack({ name, isStableRelease }, packagePath, version, system) {
+    core.debug(`Extracting package at ${packagePath}`);
     let extractPath = await toolCache.extractTar(packagePath);
-    core.debug("Package extracted");
-    let cachedPath = await toolCache.cacheDir(path.join(extractPath, packageName), `swift-${system.name}`, version);
+    if (isStableRelease) {
+        extractPath = path.join(extractPath, name);
+    }
+    else {
+        extractPath = path.join(extractPath, `${name}-ubuntu${system.version}`);
+    }
+    let cachedPath = await toolCache.cacheDir(path.join(extractPath), `swift-${system.name}`, version);
     core.debug("Package cached");
     return cachedPath;
 }
@@ -234,16 +240,15 @@ exports.install = void 0;
 const core = __importStar(__nccwpck_require__(2186));
 const toolCache = __importStar(__nccwpck_require__(7784));
 const path = __importStar(__nccwpck_require__(1017));
-const swift_versions_1 = __nccwpck_require__(8263);
 const get_version_1 = __nccwpck_require__(951);
-async function install(version, system) {
+async function install(version, getPackage) {
     const toolchainName = `swift ${version}`;
     const toolchain = await toolchainVersion(toolchainName);
     if (toolchain !== version) {
         let swiftPath = toolCache.find("swift-macOS", version);
         if (swiftPath === null || swiftPath.trim().length == 0) {
             core.debug(`No matching installation found`);
-            const pkg = (0, swift_versions_1.swiftPackage)(version, system);
+            const pkg = await getPackage();
             const path = await download(pkg);
             const extracted = await unpack(pkg, path, version);
             swiftPath = extracted;
@@ -272,11 +277,14 @@ async function download({ url }) {
     core.debug("Downloading swift for macOS");
     return toolCache.downloadTool(url);
 }
-async function unpack({ name }, packagePath, version) {
-    core.debug("Extracting package");
+async function unpack({ name, isStableRelease }, packagePath, version) {
+    core.debug(`Extracting package at ${packagePath}`);
     const unpackedPath = await toolCache.extractXar(packagePath);
-    const extractedPath = await toolCache.extractTar(path.join(unpackedPath, `${name}-package.pkg`, "Payload"));
-    core.debug("Package extracted");
+    let tarPath = path.join(unpackedPath, `${name}-package.pkg`, "Payload");
+    let extractedPath = await toolCache.extractTar(tarPath);
+    if (!isStableRelease) {
+        extractedPath = path.join(extractedPath, `${name}-osx`);
+    }
     const cachedPath = await toolCache.cacheDir(extractedPath, "swift-macOS", version);
     core.debug("Package cached");
     return cachedPath;
@@ -322,27 +330,22 @@ const macos = __importStar(__nccwpck_require__(4713));
 const linux = __importStar(__nccwpck_require__(7419));
 const windows = __importStar(__nccwpck_require__(6414));
 const get_version_1 = __nccwpck_require__(951);
+const snapshot_package_1 = __nccwpck_require__(3671);
 async function run() {
     try {
         const requestedVersion = core.getInput("swift-version", { required: true });
         let platform = await system.getSystem();
-        let version = versions.verify(requestedVersion, platform);
-        switch (platform.os) {
-            case system.OS.MacOS:
-                await macos.install(version, platform);
-                break;
-            case system.OS.Ubuntu:
-                await linux.install(version, platform);
-                break;
-            case system.OS.Windows:
-                await windows.install(version, platform);
+        try {
+            let version = versions.verify(requestedVersion, platform);
+            await install(version, platform, async () => versions.swiftPackage(version, platform));
         }
-        const current = await (0, get_version_1.getVersion)();
-        if (current === version) {
-            core.setOutput("version", version);
-        }
-        else {
-            core.error(`Failed to setup requested swift version. requestd: ${version}, actual: ${current}`);
+        catch {
+            const resolver = new snapshot_package_1.SnapshotPackageResolver(null);
+            const pkg = await resolver.execute(requestedVersion, platform);
+            if (!pkg) {
+                throw new Error(`Couldn't form a package for requested version ${requestedVersion} on ${platform}`);
+            }
+            await install(pkg.version, platform, async () => pkg);
         }
     }
     catch (error) {
@@ -354,6 +357,25 @@ async function run() {
             dump = `${error}`;
         }
         core.setFailed(`Unexpected error, unable to continue. Please report at https://github.com/swift-actions/setup-swift/issues${os_1.EOL}${dump}`);
+    }
+}
+async function install(version, platform, getPackage) {
+    switch (platform.os) {
+        case system.OS.MacOS:
+            await macos.install(version, getPackage);
+            break;
+        case system.OS.Ubuntu:
+            await linux.install(version, platform, getPackage);
+            break;
+        case system.OS.Windows:
+            await windows.install(version, platform);
+    }
+    const current = await (0, get_version_1.getVersion)();
+    if (current === version) {
+        core.setOutput("version", version);
+    }
+    else {
+        core.error(`Failed to setup requested swift version. requestd: ${version}, actual: ${current}`);
     }
 }
 run();
@@ -422,6 +444,130 @@ async function getSystem() {
     return system;
 }
 exports.getSystem = getSystem;
+
+
+/***/ }),
+
+/***/ 3671:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SnapshotPackageResolver = void 0;
+const os_1 = __nccwpck_require__(1855);
+class SnapshotPackageResolver {
+    githubToken;
+    limit = 100;
+    constructor(githubToken) {
+        this.githubToken =
+            githubToken || process.env.API_GITHUB_ACCESS_TOKEN || null;
+    }
+    async execute(version, platform) {
+        const snapshot = await this.getSnapshot(version);
+        if (!snapshot) {
+            return null;
+        }
+        const pkg = this.getPackage(snapshot, platform);
+        return pkg;
+    }
+    async getSnapshot(version) {
+        let index = version.indexOf("-");
+        if (index === -1) {
+            return null;
+        }
+        const branch = version.split("-")[0];
+        index = version.indexOf("-", index + 1);
+        if (index === -1) {
+            const snapshot = await this.fetchSnapshot(branch);
+            return snapshot;
+        }
+        const date = version.slice(index + 1, version.length);
+        return { branch, date };
+    }
+    async fetchSnapshot(targetBranch) {
+        let page = 0;
+        while (true) {
+            const tags = await this.getTags(page);
+            for (const tag of tags) {
+                const snapshot = this.parseSnapshot(tag);
+                if (snapshot && snapshot.branch == targetBranch) {
+                    return snapshot;
+                }
+            }
+            if (tags.length < this.limit) {
+                return null;
+            }
+            page += 1;
+        }
+    }
+    parseSnapshot(tag) {
+        const matches = tag.name.match(/swift(?:-(\d+)\\.(\d+))?-DEVELOPMENT-SNAPSHOT-(\d{4}-\d{2}-\d{2})/);
+        if (!matches) {
+            return null;
+        }
+        if (matches[1] && matches[2]) {
+            const major = matches[1];
+            const minor = matches[2];
+            return { branch: `${major}.${minor}`, date: matches[3] };
+        }
+        return { branch: "main", date: matches[3] };
+    }
+    async getTags(page) {
+        const url = `https://api.github.com/repos/apple/swift/tags?per_page=${this.limit}&page=${page}`;
+        let headers = {};
+        if (this.githubToken) {
+            headers = {
+                Authorization: `Bearer ${this.githubToken}`,
+            };
+        }
+        const response = await fetch(url, {
+            headers: headers,
+        });
+        const json = await response.json();
+        const tags = json.map((e) => {
+            return { name: e.name };
+        });
+        return tags;
+    }
+    getPackage(snapshot, system) {
+        const identifier = snapshot.branch === "main"
+            ? `swift-DEVELOPMENT-SNAPSHOT-${snapshot.date}-a`
+            : `swift-${snapshot.branch}-DEVELOPMENT-SNAPSHOT-${snapshot.date}-a`;
+        let platform;
+        let archiveFile;
+        switch (system.os) {
+            case os_1.OS.MacOS:
+                platform = "xcode";
+                archiveFile = `${identifier}-osx.pkg`;
+                break;
+            case os_1.OS.Ubuntu:
+                platform = `ubuntu${system.version.replace(/\D/g, "")}`;
+                archiveFile = `${identifier}-ubuntu${system.version}.tar.gz`;
+                break;
+            default:
+                throw new Error("Cannot create download URL for an unsupported platform");
+        }
+        let url = "https://swift.org/builds/";
+        if (snapshot.branch === "main") {
+            url += "development/";
+        }
+        else {
+            url += `swift-${snapshot.branch}-branch/`;
+        }
+        url += `${platform}/`;
+        url += `${identifier}/`;
+        url += `${archiveFile}`;
+        return {
+            url: url,
+            name: identifier,
+            // TODO: Remove hardcodede version for main!
+            version: snapshot.branch === "main" ? "6.0" : snapshot.branch,
+            isStableRelease: false,
+        };
+    }
+}
+exports.SnapshotPackageResolver = SnapshotPackageResolver;
 
 
 /***/ }),
@@ -557,6 +703,7 @@ function swiftPackage(version, system) {
         url: `https://swift.org/builds/swift-${version}-release/${platform}/swift-${version}-RELEASE/${archiveFile}`,
         name: archiveName,
         version: version,
+        isStableRelease: true,
     };
 }
 exports.swiftPackage = swiftPackage;

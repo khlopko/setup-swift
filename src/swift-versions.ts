@@ -82,6 +82,7 @@ export interface Package {
   url: string;
   name: string;
   version: string;
+  isStableRelease: boolean;
 }
 
 export function swiftPackage(version: string, system: System): Package {
@@ -113,6 +114,7 @@ export function swiftPackage(version: string, system: System): Package {
     url: `https://swift.org/builds/swift-${version}-release/${platform}/swift-${version}-RELEASE/${archiveFile}`,
     name: archiveName,
     version: version,
+    isStableRelease: true,
   };
 }
 
