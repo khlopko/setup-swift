@@ -62,13 +62,14 @@ async function unpack(
   version: string,
   system: System
 ) {
-  core.debug(`Extracting package at ${packagePath}`);
+  core.debug("Extracting package");
   let extractPath = await toolCache.extractTar(packagePath);
   if (isStableRelease) {
     extractPath = path.join(extractPath, name);
   } else {
     extractPath = path.join(extractPath, `${name}-ubuntu${system.version}`);
   }
+  core.debug("Package extracted");
   let cachedPath = await toolCache.cacheDir(
     path.join(extractPath),
     `swift-${system.name}`,

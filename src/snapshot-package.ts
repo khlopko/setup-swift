@@ -126,6 +126,7 @@ export class SnapshotPackageResolver {
     url += `${identifier}/`;
     url += `${archiveFile}`;
 
+    console.log(url);
     return {
       url: url,
       name: identifier,

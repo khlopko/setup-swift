@@ -191,7 +191,7 @@ async function download({ url, name }) {
     return { pkg, signature, name };
 }
 async function unpack({ name, isStableRelease }, packagePath, version, system) {
-    core.debug(`Extracting package at ${packagePath}`);
+    core.debug("Extracting package");
     let extractPath = await toolCache.extractTar(packagePath);
     if (isStableRelease) {
         extractPath = path.join(extractPath, name);
@@ -199,6 +199,7 @@ async function unpack({ name, isStableRelease }, packagePath, version, system) {
     else {
         extractPath = path.join(extractPath, `${name}-ubuntu${system.version}`);
     }
+    core.debug("Package extracted");
     let cachedPath = await toolCache.cacheDir(path.join(extractPath), `swift-${system.name}`, version);
     core.debug("Package cached");
     return cachedPath;
@@ -249,8 +250,8 @@ async function install(version, getPackage) {
         if (swiftPath === null || swiftPath.trim().length == 0) {
             core.debug(`No matching installation found`);
             const pkg = await getPackage();
-            const path = await download(pkg);
-            const extracted = await unpack(pkg, path, version);
+            const downloadPath = await download(pkg);
+            const extracted = await unpack(pkg, downloadPath, version);
             swiftPath = extracted;
         }
         else {
@@ -278,13 +279,17 @@ async function download({ url }) {
     return toolCache.downloadTool(url);
 }
 async function unpack({ name, isStableRelease }, packagePath, version) {
-    core.debug(`Extracting package at ${packagePath}`);
+    core.debug("Extracting package");
     const unpackedPath = await toolCache.extractXar(packagePath);
-    let tarPath = path.join(unpackedPath, `${name}-package.pkg`, "Payload");
-    let extractedPath = await toolCache.extractTar(tarPath);
-    if (!isStableRelease) {
-        extractedPath = path.join(extractedPath, `${name}-osx`);
+    let tarPath;
+    if (isStableRelease) {
+        tarPath = path.join(unpackedPath, `${name}-package.pkg`, "Payload");
     }
+    else {
+        tarPath = path.join(unpackedPath, `${name}-osx-package.pkg`, "Payload");
+    }
+    let extractedPath = await toolCache.extractTar(tarPath);
+    core.debug("Package extracted");
     const cachedPath = await toolCache.cacheDir(extractedPath, "swift-macOS", version);
     core.debug("Package cached");
     return cachedPath;
@@ -558,6 +563,7 @@ class SnapshotPackageResolver {
         url += `${platform}/`;
         url += `${identifier}/`;
         url += `${archiveFile}`;
+        console.log(url);
         return {
             url: url,
             name: identifier,

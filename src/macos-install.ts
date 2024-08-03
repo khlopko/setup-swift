@@ -1,10 +1,8 @@
 import * as core from "@actions/core";
 import * as toolCache from "@actions/tool-cache";
 import * as path from "path";
-import * as fs from "fs";
 import { Package } from "./swift-versions";
 import { getVersion } from "./get-version";
-import { System } from "./os";
 
 export async function install(
   version: string,
@@ -20,8 +18,8 @@ export async function install(
       core.debug(`No matching installation found`);
 
       const pkg = await getPackage();
-      const path = await download(pkg);
-      const extracted = await unpack(pkg, path, version);
+      const downloadPath = await download(pkg);
+      const extracted = await unpack(pkg, downloadPath, version);
 
       swiftPath = extracted;
     } else {
@@ -59,13 +57,16 @@ async function unpack(
   packagePath: string,
   version: string
 ) {
-  core.debug(`Extracting package at ${packagePath}`);
+  core.debug("Extracting package");
   const unpackedPath = await toolCache.extractXar(packagePath);
-  let tarPath = path.join(unpackedPath, `${name}-package.pkg`, "Payload");
-  let extractedPath = await toolCache.extractTar(tarPath);
-  if (!isStableRelease) {
-    extractedPath = path.join(extractedPath, `${name}-osx`);
+  let tarPath: string;
+  if (isStableRelease) {
+    tarPath = path.join(unpackedPath, `${name}-package.pkg`, "Payload");
+  } else {
+    tarPath = path.join(unpackedPath, `${name}-osx-package.pkg`, "Payload");
   }
+  let extractedPath = await toolCache.extractTar(tarPath);
+  core.debug("Package extracted");
   const cachedPath = await toolCache.cacheDir(
     extractedPath,
     "swift-macOS",
